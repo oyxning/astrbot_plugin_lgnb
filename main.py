@@ -337,21 +337,24 @@ class LGNBPlugin(Star):
                 return True
         except Exception:
             pass
-        # 2. @bot — 验证 @ 的是否为 bot 自己
+        # 2. @bot — 只要消息链中有 At 组件即认为被 @
         try:
             if event.message_obj:
-                bot_id = event.message_obj.self_id
                 for c in event.message_obj.message:
                     c_type = c.get("type", "") if isinstance(c, dict) else getattr(c, "type", "")
                     if c_type and c_type.lower() == "at":
-                        target = c.get("data", {}).get("qq", c.get("data", {}).get("user_id", "")) if isinstance(c, dict) else getattr(c, "data", {}).get("qq", getattr(c, "data", {}).get("user_id", ""))
-                        if str(target) == str(bot_id):
-                            return True
+                        return True
         except Exception:
             pass
-        # 3. 关键词触发
-        for kw in ["/灵感", "/总结", "/状态", "/归类", "/lgnb", "/删除数据"]:
-            if kw in content.lower():
+        # 3. 关键词触发（带/和不带/都支持）
+        keywords = [
+            "灵感", "/灵感", "总结", "/总结", "状态", "/状态",
+            "归类", "/归类", "lgnb", "/lgnb", "删除数据", "/删除数据",
+            "数据", "导出",
+        ]
+        content_lower = content.lower()
+        for kw in keywords:
+            if kw.lower() in content_lower:
                 return True
         return False
 
