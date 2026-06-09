@@ -280,7 +280,7 @@ class LGNBPlugin(Star):
 
     # ========== 消息处理 ==========
 
-    @filter.on_message
+    @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
         group_id = event.unified_msg_origin
         if not self._is_whitelisted(group_id):
@@ -290,7 +290,11 @@ class LGNBPlugin(Star):
             return
         user_id = event.get_sender_id() if hasattr(event, "get_sender_id") else ""
         user_name = event.get_sender_name() if hasattr(event, "get_sender_name") else ""
-        msg_id = str(event.message_id) if hasattr(event, "message_id") else ""
+        # 获取 message_id 用于去重
+        try:
+            msg_id = str(event.message_obj.message_id) if event.message_obj else ""
+        except Exception:
+            msg_id = ""
 
         # 存储 (带 dedup)
         stored = self.db.store_message(
@@ -309,43 +313,34 @@ class LGNBPlugin(Star):
             if stored is not None:  # 不重复消息时才响应
                 event.stop_event()
                 # 即时反馈
-                feedback = "正在思考，请稍候..."
-                asyncio.ensure_future(self._send_feedback(event, feedback))
+                yield event.plain_result("正在思考，请稍候...")
                 reply = await self._build_bot_reply(event)
                 if reply:
                     chunks = _trim_reply(reply, self.config.get("max_reply_length", 0))
                     for chunk in chunks:
                         yield event.plain_result(chunk)
 
-    async def _send_feedback(self, event: AstrMessageEvent, text: str):
-        """先发一条短提示，让用户知道在处理"""
-        try:
-            feed = event.plain_result(text)
-            # AstrBot generator pattern: send via context
-            yield feed
-        except Exception:
-            pass
-
     def _is_at_bot(self, event: AstrMessageEvent) -> bool:
         content = event.message_str or ""
-        # at 组件
+        # 检查消息链中是否包含 @ 消息段
         try:
-            for obj in [event.message_obj, event.get_message_out()]:
-                if obj and hasattr(obj, "message"):
-                    for c in obj.message:
-                        t = c.get("type", "") if isinstance(c, dict) else getattr(c, "type", "")
-                        if t.lower() == "at":
-                            return True
+            if event.message_obj and hasattr(event.message_obj, "message"):
+                for c in event.message_obj.message:
+                    t = c.get("type", "") if isinstance(c, dict) else getattr(c, "type", "")
+                    if t and t.lower() == "at":
+                        return True
         except Exception:
             pass
-        # 关键词
+        # 关键词触发
         for kw in ["@bot", "@机器人", "/灵感", "/总结", "/状态", "/归类", "/lgnb", "/删除数据"]:
             if kw in content.lower():
                 return True
-        # 私聊
+        # 私聊自动响应
         try:
-            if event.is_private_chat():
-                return True
+            if event.message_obj and hasattr(event.message_obj, "type"):
+                from astrbot.api.event.filter import EventMessageType
+                if event.message_obj.type == EventMessageType.PRIVATE_MESSAGE:
+                    return True
         except Exception:
             pass
         return False
@@ -403,11 +398,12 @@ class LGNBPlugin(Star):
         try:
             pid = self.config.get("llm_provider", "").strip()
             if not pid:
-                wl = self.config.get("whitelist_groups", [])
-                if wl:
-                    pid = await self.context.get_current_chat_provider_id(wl[0])
+                try:
+                    pid = await self.context.get_current_chat_provider_id("")
+                except Exception:
+                    pass
             if not pid:
-                return None
+                return "[LGNB] 未配置 LLM 模型提供商"
             from astrbot.core.agent.message import UserMessageSegment, TextPart
             full = f"{system_prompt}\n\n{user_prompt}"
             resp = await self.context.llm_generate(
