@@ -1,0 +1,5 @@
+name: lgnb
+desc: 聊天灵感提取插件 - 记录群聊消息、提取灵感、生成总结、支持自然语言查询
+version: 1.0.0
+author: LumineStory
+repo: https://github.com/oyxning/astrbot_plugin_lgnb

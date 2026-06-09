@@ -1,0 +1,85 @@
+{
+  "whitelist_groups": {
+    "description": "白名单群聊/私聊 UMO 列表（填写 unified_msg_origin 标识，如 group_xxx 或 friend_xxx）",
+    "type": "list",
+    "hint": "使用 /sid 指令可查看当前会话的 UMO",
+    "items": {
+      "type": "string",
+      "description": "白名单 UMO",
+      "hint": "例如 group_123456789"
+    },
+    "default": []
+  },
+  "sub_admins": {
+    "description": "副管理员用户 ID 列表（全局管理员自动拥有权限）",
+    "type": "list",
+    "hint": "填写用户的 user_id",
+    "items": {
+      "type": "string",
+      "description": "副管理员 ID",
+      "hint": "例如 friend_987654321"
+    },
+    "default": []
+  },
+  "message_threshold": {
+    "description": "累积多少条消息后自动进行一次灵感归类",
+    "type": "int",
+    "hint": "设置为 0 则关闭自动归类",
+    "default": 50
+  },
+  "daily_summary_hour": {
+    "description": "每日灵感总结触发时间（小时，0-23）",
+    "type": "int",
+    "hint": "例如 20 表示晚上 8 点触发",
+    "default": 20
+  },
+  "daily_summary_minute": {
+    "description": "每日灵感总结触发时间（分钟，0-59）",
+    "type": "int",
+    "hint": "与 daily_summary_hour 配合使用",
+    "default": 0
+  },
+  "push_daily_summary": {
+    "description": "每日总结是否自动推送到群聊",
+    "type": "bool",
+    "hint": "关闭后只存储在数据库中，不推送到群聊",
+    "default": true
+  },
+  "debug_mode": {
+    "description": "Debug 模式：开启后返回 LLM 理解过程和调用的工具信息",
+    "type": "bool",
+    "hint": "开启后会在回复中附带调试信息",
+    "default": false
+  },
+  "llm_provider": {
+    "description": "LLM 模型提供商（留空使用 AstrBot 默认配置）",
+    "type": "string",
+    "hint": "如果留空，将使用 AstrBot 的默认聊天模型",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "max_query_messages": {
+    "description": "单次查询/归类时检索的最大消息数",
+    "type": "int",
+    "hint": "控制 LLM 上下文大小，建议 100-500",
+    "default": 200
+  },
+  "max_reply_length": {
+    "description": "单条回复的最大字符数（超长自动分段，0=不限制）",
+    "type": "int",
+    "hint": "避免平台消息长度限制，建议 2000-4000",
+    "default": 0
+  },
+  "data_retention_days": {
+    "description": "消息保留天数（0=永久保留），每天凌晨 3 点自动清理过期消息",
+    "type": "int",
+    "hint": "灵感、总结不会被清理。建议 90-365",
+    "default": 0
+  },
+  "query_scope": {
+    "description": "普通用户查询范围：all=全部 / self_only=仅自己相关",
+    "type": "string",
+    "hint": "self_only 模式下用户只能查到包含自己发言的灵感",
+    "default": "all"
+  }
+}
