@@ -305,7 +305,13 @@ class LGNBPlugin(Star):
         wl: list = self.config.get("whitelist_groups", [])
         if not wl:
             return False
-        return group_id in wl
+        if group_id in wl:
+            return True
+        # UMO 格式如 平台_群ID，用户可能只配了其中一部分
+        for w in wl:
+            if len(w) >= 4 and w in group_id:
+                return True
+        return False
 
     def _query_scope(self) -> str:
         """用户级隔离配置: all / self_only"""
