@@ -349,33 +349,42 @@ class LGNBPlugin(Star):
 
     @filter.on_waiting_llm_request()
     async def on_waiting_llm(self, event: AstrMessageEvent):
-        """在 LLM 调用前拦截 @bot / 关键词 / 私聊消息"""
+        """在 LLM 调用前判断是否需要 LGNB 介入"""
         group_id = event.unified_msg_origin
         if not self._is_whitelisted(group_id):
             return
-        if not self._should_interact(event):
+
+        # 快速预检：只有 @bot / 私聊 / 斜杠指令才值得调用 LLM 做意图识别
+        if not self._worth_intent_check(event):
             return
-        # 停止默认 LLM 流程
+
+        # LLM 判断用户是否真的想用 LGNB
+        message = event.message_str or ""
+        intent = await self._parse_intent(event, message)
+        if intent is None:
+            return  # LLM 调用失败，放行给默认 Agent
+
+        tool = intent.get("tool", "unknown")
+        if tool == "unknown":
+            return  # 用户只是普通聊天，放行给默认 Agent
+
+        # 是 LGNB 指令 → 拦截
         event.stop_event()
-        # 先发"正在思考"
         await event.send(event.plain_result("正在思考，请稍候..."))
-        # 构建 LGNB 回复
-        reply = await self._build_bot_reply(event)
+        reply = await self._execute_and_format(event, intent)
         if reply:
-            chunks = _trim_reply(reply, self.config.get("max_reply_length", 0))
-            for chunk in chunks:
+            for chunk in _trim_reply(reply, self.config.get("max_reply_length", 0)):
                 await event.send(event.plain_result(chunk))
 
-    def _should_interact(self, event: AstrMessageEvent) -> bool:
-        """是否需要 LGNB 介入"""
-        content = event.message_str or ""
-        # 1. 私聊自动响应
+    def _worth_intent_check(self, event: AstrMessageEvent) -> bool:
+        """快速判断是否值得调用 LLM 做意图识别（避免每条消息都调用）"""
+        # 1. 私聊 → 值得
         try:
             if event.message_obj and event.message_obj.type and str(event.message_obj.type).endswith("PRIVATE_MESSAGE"):
                 return True
         except Exception:
             pass
-        # 2. @bot — 只要消息链中有 At 组件即认为被 @
+        # 2. @bot → 值得
         try:
             if event.message_obj:
                 for c in event.message_obj.message:
@@ -384,26 +393,17 @@ class LGNBPlugin(Star):
                         return True
         except Exception:
             pass
-        # 3. 关键词触发（带/和不带/都支持）
-        keywords = [
-            "灵感", "/灵感", "总结", "/总结", "状态", "/状态",
-            "归类", "/归类", "lgnb", "/lgnb", "删除数据", "/删除数据",
-            "数据", "导出",
-        ]
-        content_lower = content.lower()
-        for kw in keywords:
-            if kw.lower() in content_lower:
+        # 3. 斜杠指令 → 值得（明确的功能调用意图）
+        content = (event.message_str or "").lower()
+        for cmd in ["/灵感", "/总结", "/状态", "/归类", "/lgnb", "/删除数据", "/导出"]:
+            if cmd in content:
                 return True
+        # 普通群聊消息 → 不拦截
         return False
 
-    async def _build_bot_reply(self, event: AstrMessageEvent) -> str:
-        message = event.message_str or ""
+    async def _execute_and_format(self, event: AstrMessageEvent, intent: dict) -> str:
+        """根据已解析的 intent 执行工具并格式化回复"""
         debug = self.config.get("debug_mode", False)
-
-        intent = await self._parse_intent(event, message)
-        if intent is None:
-            return "意图解析失败，请稍后重试。"
-
         tool = intent.get("tool", "unknown")
         params = intent.get("params", {})
         reasoning = intent.get("reasoning", "")
