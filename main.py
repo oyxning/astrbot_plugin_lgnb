@@ -551,7 +551,15 @@ class LGNBPlugin(Star):
     def _get_status(self, gid: str) -> str:
         s = self.db.get_data_stats(gid)
         lt = s["last_categorize"]
-        lt_str = datetime.fromtimestamp(lt["time"]).strftime("%Y-%m-%d %H:%M") if lt["time"] else ""
+        lt_time = lt.get("time")
+        if lt_time:
+            try:
+                ts = float(lt_time)
+                lt_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+            except (TypeError, ValueError, OSError):
+                lt_str = str(lt_time)
+        else:
+            lt_str = ""
         return (f"数据统计\n消息: {s['total_messages']} (未归类: {s['uncategorized_messages']})\n"
                 f"灵感: {s['total_inspirations']}\n总结: {s['total_summaries']}\n"
                 f"上次归类: {lt_str} ({lt['trigger_type']}, 处理{lt['message_count']}条, 提取{lt['inspiration_count']}条)")
