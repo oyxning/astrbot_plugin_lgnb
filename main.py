@@ -278,10 +278,11 @@ class LGNBPlugin(Star):
         """用户级隔离配置: all / self_only"""
         return self.config.get("query_scope", "all")
 
-    # ========== 消息处理 ==========
+    # ========== 消息存储 ==========
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
+        """仅负责存储消息 + 阈值归类，不做任何 @bot 响应"""
         group_id = event.unified_msg_origin
         if not self._is_whitelisted(group_id):
             return
@@ -290,14 +291,12 @@ class LGNBPlugin(Star):
             return
         user_id = event.get_sender_id() if hasattr(event, "get_sender_id") else ""
         user_name = event.get_sender_name() if hasattr(event, "get_sender_name") else ""
-        # 获取 message_id 用于去重
         try:
             msg_id = str(event.message_obj.message_id) if event.message_obj else ""
         except Exception:
             msg_id = ""
 
-        # 存储 (带 dedup)
-        stored = self.db.store_message(
+        self.db.store_message(
             group_id=group_id, group_name=group_id,
             user_id=user_id, user_name=user_name,
             content=content, message_id=msg_id,
@@ -308,41 +307,52 @@ class LGNBPlugin(Star):
         if threshold > 0 and self.db.get_uncategorized_count(group_id) >= threshold:
             asyncio.ensure_future(self._auto_categorize(group_id))
 
-        # @bot 交互
-        if self._is_at_bot(event):
-            if stored is not None:  # 不重复消息时才响应
-                event.stop_event()
-                # 即时反馈
-                yield event.plain_result("正在思考，请稍候...")
-                reply = await self._build_bot_reply(event)
-                if reply:
-                    chunks = _trim_reply(reply, self.config.get("max_reply_length", 0))
-                    for chunk in chunks:
-                        yield event.plain_result(chunk)
+    # ========== @bot 交互 ==========
 
-    def _is_at_bot(self, event: AstrMessageEvent) -> bool:
+    @filter.on_waiting_llm_request()
+    async def on_waiting_llm(self, event: AstrMessageEvent):
+        """在 LLM 调用前拦截 @bot / 关键词 / 私聊消息"""
+        group_id = event.unified_msg_origin
+        if not self._is_whitelisted(group_id):
+            return
+        if not self._should_interact(event):
+            return
+        # 停止默认 LLM 流程
+        event.stop_event()
+        # 先发"正在思考"
+        await event.send(event.plain_result("正在思考，请稍候..."))
+        # 构建 LGNB 回复
+        reply = await self._build_bot_reply(event)
+        if reply:
+            chunks = _trim_reply(reply, self.config.get("max_reply_length", 0))
+            for chunk in chunks:
+                await event.send(event.plain_result(chunk))
+
+    def _should_interact(self, event: AstrMessageEvent) -> bool:
+        """是否需要 LGNB 介入"""
         content = event.message_str or ""
-        # 检查消息链中是否包含 @ 消息段
+        # 1. 私聊自动响应
         try:
-            if event.message_obj and hasattr(event.message_obj, "message"):
-                for c in event.message_obj.message:
-                    t = c.get("type", "") if isinstance(c, dict) else getattr(c, "type", "")
-                    if t and t.lower() == "at":
-                        return True
+            if event.message_obj and event.message_obj.type and str(event.message_obj.type).endswith("PRIVATE_MESSAGE"):
+                return True
         except Exception:
             pass
-        # 关键词触发
-        for kw in ["@bot", "@机器人", "/灵感", "/总结", "/状态", "/归类", "/lgnb", "/删除数据"]:
+        # 2. @bot — 验证 @ 的是否为 bot 自己
+        try:
+            if event.message_obj:
+                bot_id = event.message_obj.self_id
+                for c in event.message_obj.message:
+                    c_type = c.get("type", "") if isinstance(c, dict) else getattr(c, "type", "")
+                    if c_type and c_type.lower() == "at":
+                        target = c.get("data", {}).get("qq", c.get("data", {}).get("user_id", "")) if isinstance(c, dict) else getattr(c, "data", {}).get("qq", getattr(c, "data", {}).get("user_id", ""))
+                        if str(target) == str(bot_id):
+                            return True
+        except Exception:
+            pass
+        # 3. 关键词触发
+        for kw in ["/灵感", "/总结", "/状态", "/归类", "/lgnb", "/删除数据"]:
             if kw in content.lower():
                 return True
-        # 私聊自动响应
-        try:
-            if event.message_obj and hasattr(event.message_obj, "type"):
-                from astrbot.api.event.filter import EventMessageType
-                if event.message_obj.type == EventMessageType.PRIVATE_MESSAGE:
-                    return True
-        except Exception:
-            pass
         return False
 
     async def _build_bot_reply(self, event: AstrMessageEvent) -> str:
