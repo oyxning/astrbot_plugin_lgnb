@@ -32,31 +32,39 @@ from .database import InspirationDB
 # LLM Prompt
 # ============================================================
 
-INTENT_PARSE_SYSTEM = """你是 LGNB 聊天灵感插件的意图解析器。输出 JSON。
+INTENT_PARSE_SYSTEM = """你是 LGNB 聊天灵感插件的路由器。**所有工具都是用来查询/操作本群数据库中已存储的聊天记录、灵感和总结，不是通用工具。**
+
+关键判断：用户是想查询**本群储存的历史聊天数据**，还是在进行**普通 AI 对话**（问知识、闲聊、让 AI 帮忙写东西等）？
 
 工具:
-1. query_inspirations — 查灵感
+1. query_inspirations — 查询数据库中已提取的灵感记录
    - start_date/end_date: YYYY-MM-DD (可选)
    - limit: 返回条数 (可选, 默认10)
-2. generate_summary — 生成总结
+2. generate_summary — 基于数据库中的聊天记录生成时间段总结
    - start_date/end_date: YYYY-MM-DD (必填, 未指定默认最近7天至今)
-3. get_status — 数据统计, 无参数
-4. categorize_now — 手动归类 (管理员)
-5. export_data — 导出数据 (管理员)
+3. get_status — 查看本群数据库中的数据统计, 无参数
+4. categorize_now — 手动触发灵感归类 (管理员), 无参数
+5. export_data — 导出数据库中的数据 (管理员)
    - data_type: "all"/"range"
    - start_date/end_date: 仅range需要
    - format: "json"/"markdown"/"csv" (可选, 默认json)
-6. analyze_chat — AI 对聊天发表看法
+6. analyze_chat — AI 对数据库中某段聊天记录发表看法
    - start_date/end_date (可选, 默认近7天)
    - topic: 分析角度 (可选)
-7. search_messages — 搜关键词
+7. search_messages — 在数据库中搜索包含关键词的聊天记录
    - keyword: 必填, 多个用逗号分隔
    - start_date/end_date (可选)
-8. delete_data — 删除数据 (管理员)
+8. delete_data — 删除数据库中的数据 (管理员)
    - start_date/end_date: 必填
-9. unknown
+9. unknown — 不属于以上任何场景：普通聊天、知识问答、让AI帮忙写作/总结外部内容等
 
-输出: {"tool":"...","params":{...},"reasoning":"..."}"""
+输出: {"tool":"...","params":{...},"reasoning":"解释为什么选这个工具而非unknown"}
+
+判 unknown 的关键规则:
+- 用户问的是通用知识（如"董路的天赋是什么"）→ unknown，这是默认 Agent 的知识问答
+- 用户让 AI 帮自己整理/写作（如"帮我整理素材""帮我写总结"）但没提到群聊历史 → unknown
+- 用户明确提到回顾/查看本群的聊天、灵感、总结 → 匹配对应工具
+- 不确定时偏向 unknown，让默认 Agent 处理"""
 
 
 CATEGORIZE_PROMPT = """从以下群聊中提取灵感。JSON数组输出, 每个: {"content":"...","category":"分类"}。
@@ -106,7 +114,13 @@ KEYWORD_SEARCH_PROMPT = """搜索「{keyword}」的聊天记录。{time_info}
 # Helpers
 # ============================================================
 
-RE_DATE_RANGE = re.compile(r"(\d{4}-\d{2}-\d{2})\s*[~到至]\s*(\d{4}-\d{2}-\d{2})")
+
+def _safe_ts(ts) -> float:
+    """安全转换时间戳为 float，失败返回 0"""
+    try:
+        return float(ts)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _parse_date_range(params: dict, default_days: int = 7) -> tuple[float, float, str, str]:
@@ -130,8 +144,9 @@ def _format_conversation(messages: list[dict]) -> tuple[str, set]:
     lines = []
     users = set()
     for m in messages:
-        ts = datetime.fromtimestamp(m["timestamp"]).strftime("%m-%d %H:%M")
-        lines.append(f"[{ts}] {m['user_name']}: {m['content']}")
+        ts_f = _safe_ts(m.get("timestamp", 0))
+        ts_str = datetime.fromtimestamp(ts_f).strftime("%m-%d %H:%M") if ts_f > 0 else "??-?? ??:??"
+        lines.append(f"[{ts_str}] {m.get('user_name', '')}: {m.get('content', '')}")
         users.add(m.get("user_id", ""))
     return "\n".join(lines), users
 
@@ -165,8 +180,8 @@ def _json_to_markdown(data: dict) -> str:
         if rows:
             lines.append(f"## {label} ({len(rows)} 条)")
             for r in rows:
-                ts = r.get("timestamp") or r.get("created_at", 0)
-                ts_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else ""
+                ts = _safe_ts(r.get("timestamp") or r.get("created_at", 0))
+                ts_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts > 0 else ""
                 content = r.get("content", "")
                 if label == "消息":
                     lines.append(f"- [{ts_str}] **{r.get('user_name','')}**: {content}")
@@ -182,8 +197,9 @@ def _json_to_csv(data: dict) -> str:
     w = csv.writer(buf)
     w.writerow(["时间", "用户ID", "用户名", "内容"])
     for m in data.get("messages", []):
-        ts = datetime.fromtimestamp(m.get("timestamp", 0)).strftime("%Y-%m-%d %H:%M:%S")
-        w.writerow([ts, m.get("user_id", ""), m.get("user_name", ""), m.get("content", "")])
+        ts = _safe_ts(m.get("timestamp", 0))
+        ts_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts > 0 else ""
+        w.writerow([ts_str, m.get("user_id", ""), m.get("user_name", ""), m.get("content", "")])
     return buf.getvalue()
 
 
@@ -201,8 +217,14 @@ class LGNBPlugin(Star):
         self.db = InspirationDB(db_path)
         self.db.init()
         self._summary_lock = asyncio.Lock()
+        self._categorize_locks: dict[str, asyncio.Lock] = {}  # per-group 归类锁
         self._scheduler_task: Optional[asyncio.Task] = None
         self._start_scheduler()
+
+    def _get_categorize_lock(self, gid: str) -> asyncio.Lock:
+        if gid not in self._categorize_locks:
+            self._categorize_locks[gid] = asyncio.Lock()
+        return self._categorize_locks[gid]
 
     # ========== 调度器 ==========
 
@@ -215,14 +237,24 @@ class LGNBPlugin(Star):
         hour = self.config.get("daily_summary_hour", 20)
         minute = self.config.get("daily_summary_minute", 0)
         retention = self.config.get("data_retention_days", 0)
+        _last_summary_date = ""  # 防当天重复触发
         while True:
             try:
-                await asyncio.sleep(45)
+                # 计算下一次触发时间（精确到秒）
                 now = datetime.now()
-                if now.hour == hour and now.minute == minute:
+                next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                if next_run <= now:
+                    next_run += timedelta(days=1)
+                delay = (next_run - now).total_seconds()
+                # 最多睡 120 秒后重新计算一次防止偏差累积
+                await asyncio.sleep(min(delay, 120))
+                now = datetime.now()
+                today_str = now.strftime("%Y-%m-%d")
+                if now.hour == hour and now.minute == minute and _last_summary_date != today_str:
+                    _last_summary_date = today_str
                     await self._trigger_daily_summaries()
-                # 每天 3 点做一次过期清理
-                if retention > 0 and now.hour == 3 and now.minute == 0:
+                # 过期清理 (每天 3:00-3:02)
+                if retention > 0 and now.hour == 3 and 0 <= now.minute <= 2 and _last_summary_date != today_str:
                     await self._auto_cleanup()
             except asyncio.CancelledError:
                 break
@@ -254,26 +286,24 @@ class LGNBPlugin(Star):
     # ========== 权限 ==========
 
     def _is_admin(self, event: AstrMessageEvent) -> bool:
-        user_id = event.unified_msg_origin
+        sender_id = ""
         try:
-            if self.context.is_admin(user_id):
+            sender_id = event.get_sender_id()
+        except Exception:
+            pass
+        try:
+            if sender_id and self.context.is_admin(sender_id):
                 return True
         except Exception:
             pass
         sub_admins: list = self.config.get("sub_admins", [])
-        sender_uid = event.get_sender_id() if hasattr(event, "get_sender_id") else user_id
-        return sender_uid in sub_admins
+        return sender_id in sub_admins
 
     def _is_whitelisted(self, group_id: str) -> bool:
         wl: list = self.config.get("whitelist_groups", [])
         if not wl:
             return False
-        if group_id in wl:
-            return True
-        for w in wl:
-            if group_id.endswith(w) or w.endswith(group_id):
-                return True
-        return False
+        return group_id in wl
 
     def _query_scope(self) -> str:
         """用户级隔离配置: all / self_only"""
@@ -312,7 +342,7 @@ class LGNBPlugin(Star):
 
     @filter.on_llm_response()
     async def on_llm_resp(self, event: AstrMessageEvent, resp: LLMResponse):
-        """捕获 AI 正常聊天回复并存入数据库"""
+        """捕获 AI 正常聊天回复并存入数据库（跳过 LGNB 内部 LLM 调用）"""
         if not self.config.get("save_ai_replies", True):
             return
         group_id = event.unified_msg_origin
@@ -321,17 +351,22 @@ class LGNBPlugin(Star):
         text = resp.completion_text or ""
         if not text.strip():
             return
-        # 跳过功能回复（包含特征标记的 LGNB 输出）
-        skip_patterns = [
+        # 跳过 LGNB 自身的 LLM 输出：工具回复 + LLM 原始格式
+        skip_prefixes = [
             "归类完成", "暂无灵感", "数据统计", "未找到包含",
             "搜索「", "AI看法", "总结 (", "导出完成",
             "已删除", "意图解析失败", "未知工具",
             "权限不足", "未配置 LLM", "LLM 调用失败",
             "正在思考", "可用操作:", "请提供",
+            "[", "{", "```",  # LLM 原始 JSON/表格/代码块
         ]
-        for pat in skip_patterns:
-            if pat in text[:50]:
+        head = text[:80].strip()
+        for pat in skip_prefixes:
+            if head.startswith(pat):
                 return
+        # 跳过 LGNB 功能回复特征：以 "1." 开头的结构化输出
+        if head.startswith("1.") and len(head) < 80:
+            return
         bot_uid = "AI_ASSISTANT"
         bot_name = "AI"
         try:
@@ -342,7 +377,7 @@ class LGNBPlugin(Star):
         self.db.store_message(
             group_id=group_id, group_name=group_id,
             user_id=bot_uid, user_name=bot_name,
-            content=text, message_id="",  # AI 回复无 message_id，不参与用户消息去重
+            content=text, message_id="",
         )
 
     # ========== @bot 交互 ==========
@@ -567,7 +602,8 @@ class LGNBPlugin(Star):
     # ========== 归类 ==========
 
     async def _auto_categorize(self, gid: str):
-        async with self._summary_lock:
+        lock = self._get_categorize_lock(gid)
+        async with lock:
             if self.db.get_uncategorized_count(gid) < self.config.get("message_threshold", 50):
                 return
             await self._do_categorize(gid, "auto")
@@ -588,6 +624,9 @@ class LGNBPlugin(Star):
         result = await self._call_llm_config(CATEGORIZE_PROMPT, conv)
         if not result:
             return "LLM 调用失败。"
+        # 检查 LLM 是否返回了错误而非灵感数据
+        if result.startswith("[LGNB]") or result.startswith("LLM 调用失败"):
+            return result
         insps = self._parse_inspiration_json(result)
         if not insps:
             return "本次未提取到灵感。"

@@ -365,27 +365,31 @@ class InspirationDB:
 
     # ---------- 数据导出 ----------
 
+    _EXPORT_LIMIT = 50000  # 单表导出上限，防止 OOM
+
     def export_all(self, group_id: str) -> dict:
         conn = self._get_conn()
+        L = self._EXPORT_LIMIT
         return {
             "group_id": group_id,
             "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "messages": [dict(r) for r in conn.execute("SELECT * FROM messages WHERE group_id=? ORDER BY timestamp ASC", (group_id,)).fetchall()],
-            "inspirations": [dict(r) for r in conn.execute("SELECT * FROM inspirations WHERE group_id=? ORDER BY created_at ASC", (group_id,)).fetchall()],
-            "summaries": [dict(r) for r in conn.execute("SELECT * FROM summaries WHERE group_id=? ORDER BY created_at ASC", (group_id,)).fetchall()],
-            "categorize_log": [dict(r) for r in conn.execute("SELECT * FROM categorize_log WHERE group_id=? ORDER BY created_at ASC", (group_id,)).fetchall()],
+            "messages": [dict(r) for r in conn.execute("SELECT * FROM messages WHERE group_id=? ORDER BY timestamp ASC LIMIT ?", (group_id, L)).fetchall()],
+            "inspirations": [dict(r) for r in conn.execute("SELECT * FROM inspirations WHERE group_id=? ORDER BY created_at ASC LIMIT ?", (group_id, L)).fetchall()],
+            "summaries": [dict(r) for r in conn.execute("SELECT * FROM summaries WHERE group_id=? ORDER BY created_at ASC LIMIT ?", (group_id, L)).fetchall()],
+            "categorize_log": [dict(r) for r in conn.execute("SELECT * FROM categorize_log WHERE group_id=? ORDER BY created_at ASC LIMIT ?", (group_id, L)).fetchall()],
         }
 
     def export_range(self, group_id: str, start_time: float, end_time: float) -> dict:
         conn = self._get_conn()
+        L = self._EXPORT_LIMIT
         return {
             "group_id": group_id,
             "range_start": datetime.fromtimestamp(start_time).strftime("%Y-%m-%d %H:%M:%S"),
             "range_end": datetime.fromtimestamp(end_time).strftime("%Y-%m-%d %H:%M:%S"),
             "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "messages": [dict(r) for r in conn.execute("SELECT * FROM messages WHERE group_id=? AND timestamp>=? AND timestamp<=? ORDER BY timestamp ASC", (group_id, start_time, end_time)).fetchall()],
-            "inspirations": [dict(r) for r in conn.execute("SELECT * FROM inspirations WHERE group_id=? AND created_at>=? AND created_at<=? ORDER BY created_at ASC", (group_id, start_time, end_time)).fetchall()],
-            "summaries": [dict(r) for r in conn.execute("SELECT * FROM summaries WHERE group_id=? AND created_at>=? AND created_at<=? ORDER BY created_at ASC", (group_id, start_time, end_time)).fetchall()],
+            "messages": [dict(r) for r in conn.execute("SELECT * FROM messages WHERE group_id=? AND timestamp>=? AND timestamp<=? ORDER BY timestamp ASC LIMIT ?", (group_id, start_time, end_time, L)).fetchall()],
+            "inspirations": [dict(r) for r in conn.execute("SELECT * FROM inspirations WHERE group_id=? AND created_at>=? AND created_at<=? ORDER BY created_at ASC LIMIT ?", (group_id, start_time, end_time, L)).fetchall()],
+            "summaries": [dict(r) for r in conn.execute("SELECT * FROM summaries WHERE group_id=? AND created_at>=? AND created_at<=? ORDER BY created_at ASC LIMIT ?", (group_id, start_time, end_time, L)).fetchall()],
         }
 
     def get_user_ids(self, group_id: str) -> list[str]:
