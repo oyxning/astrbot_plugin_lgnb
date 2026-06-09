@@ -45,6 +45,12 @@
     "hint": "关闭后只存储在数据库中，不推送到群聊",
     "default": true
   },
+  "save_ai_replies": {
+    "description": "是否将 AI 的聊天回复也存入数据库作为灵感来源",
+    "type": "bool",
+    "hint": "开启后，AI 与用户的对话内容也会参与归类",
+    "default": true
+  },
   "debug_mode": {
     "description": "Debug 模式：开启后返回 LLM 理解过程和调用的工具信息",
     "type": "bool",

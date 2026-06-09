@@ -23,6 +23,7 @@ from typing import Optional
 
 from astrbot.api.star import Star, Context
 from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.provider import LLMResponse
 from astrbot.api import AstrBotConfig
 
 from .database import InspirationDB
@@ -306,6 +307,43 @@ class LGNBPlugin(Star):
         threshold = self.config.get("message_threshold", 50)
         if threshold > 0 and self.db.get_uncategorized_count(group_id) >= threshold:
             asyncio.ensure_future(self._auto_categorize(group_id))
+
+    # ========== AI 回复存储 ==========
+
+    @filter.on_llm_response()
+    async def on_llm_resp(self, event: AstrMessageEvent, resp: LLMResponse):
+        """捕获 AI 正常聊天回复并存入数据库"""
+        if not self.config.get("save_ai_replies", True):
+            return
+        group_id = event.unified_msg_origin
+        if not self._is_whitelisted(group_id):
+            return
+        text = resp.completion_text or ""
+        if not text.strip():
+            return
+        # 跳过功能回复（包含特征标记的 LGNB 输出）
+        skip_patterns = [
+            "归类完成", "暂无灵感", "数据统计", "未找到包含",
+            "搜索「", "AI看法", "总结 (", "导出完成",
+            "已删除", "意图解析失败", "未知工具",
+            "权限不足", "未配置 LLM", "LLM 调用失败",
+            "正在思考", "可用操作:", "请提供",
+        ]
+        for pat in skip_patterns:
+            if pat in text[:50]:
+                return
+        bot_uid = "AI_ASSISTANT"
+        bot_name = "AI"
+        try:
+            if event.message_obj:
+                bot_uid = event.message_obj.self_id or bot_uid
+        except Exception:
+            pass
+        self.db.store_message(
+            group_id=group_id, group_name=group_id,
+            user_id=bot_uid, user_name=bot_name,
+            content=text, message_id="",  # AI 回复无 message_id，不参与用户消息去重
+        )
 
     # ========== @bot 交互 ==========
 
